@@ -1,0 +1,414 @@
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(i64),
+    String(string),
+    Array(Vec<JsonValue>),
+    Object(Vec<JsonProperty>),
+}
+
+pub struct JsonProperty {
+    pub key: string,
+    pub value: JsonValue,
+}
+
+pub fn null_val() -> JsonValue {
+    return JsonValue::Null;
+}
+
+pub fn bool_val(b: bool) -> JsonValue {
+    return JsonValue::Bool(b);
+}
+
+pub fn int_val(n: i64) -> JsonValue {
+    return JsonValue::Number(n);
+}
+
+pub fn str_val(s: string) -> JsonValue {
+    return JsonValue::String(s);
+}
+
+pub fn array_val(items: Vec<JsonValue>) -> JsonValue {
+    return JsonValue::Array(items);
+}
+
+pub fn object_val(props: Vec<JsonProperty>) -> JsonValue {
+    return JsonValue::Object(props);
+}
+
+pub fn prop(k: string, v: JsonValue) -> JsonProperty {
+    return JsonProperty {
+        key: k,
+        value: v,
+    };
+}
+
+impl JsonValue {
+    pub fn is_null(&self) -> bool {
+        match *self {
+            JsonValue::Null => return true,
+            _ => return false,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match *self {
+            JsonValue::Bool(b) => return Some(b),
+            _ => return None,
+        }
+    }
+
+    pub fn as_int(&self) -> Option<i64> {
+        match *self {
+            JsonValue::Number(n) => return Some(n),
+            _ => return None,
+        }
+    }
+
+    pub fn as_string(&self) -> Option<string> {
+        match *self {
+            JsonValue::String(s) => return Some(s.clone()),
+            _ => return None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<Vec<JsonValue>> {
+        match *self {
+            JsonValue::Array(raw_arr) => {
+                let arr: Vec<JsonValue> = raw_arr;
+                return Some(arr.clone());
+            }
+            _ => return None,
+        }
+    }
+
+    pub fn at(&self, index: usize) -> Option<JsonValue> {
+        match *self {
+            JsonValue::Array(raw_arr) => {
+                let arr: Vec<JsonValue> = raw_arr;
+                if index < arr.len() {
+                    return Some(arr[index].clone());
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+
+    pub fn get(&self, key: string) -> Option<JsonValue> {
+        match *self {
+            JsonValue::Object(raw_props) => {
+                let props: Vec<JsonProperty> = raw_props;
+                let mut i: usize = 0;
+                while i < props.len() {
+                    let p: JsonProperty = props[i].clone();
+                    if p.key == key {
+                        return Some(p.value.clone());
+                    }
+                    i += 1;
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+pub fn escape_string(s: string) -> string {
+    let mut sb = StringBuilder::new();
+    sb.append("\"");
+    let chars: Vec<char> = s.chars();
+    let mut i: usize = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '"' {
+            sb.append("\\\"");
+        } else if ch == '\\' {
+            sb.append("\\\\");
+        } else if ch == '\n' {
+            sb.append("\\n");
+        } else if ch == '\r' {
+            sb.append("\\r");
+        } else if ch == '\t' {
+            sb.append("\\t");
+        } else {
+            sb.append(ch.to_string());
+        }
+        i += 1;
+    }
+    sb.append("\"");
+    return sb.to_string();
+}
+
+pub fn stringify(val: JsonValue) -> string {
+    match val {
+        JsonValue::Null => return "null".to_string(),
+        JsonValue::Bool(b) => {
+            if b {
+                return "true".to_string();
+            } else {
+                return "false".to_string();
+            }
+        }
+        JsonValue::Number(n) => return f"{n}",
+        JsonValue::String(s) => return escape_string(s),
+        JsonValue::Array(raw_arr) => {
+            let arr: Vec<JsonValue> = raw_arr;
+            let mut sb = StringBuilder::new();
+            sb.append("[");
+            let mut i: usize = 0;
+            while i < arr.len() {
+                if i > 0 {
+                    sb.append(",");
+                }
+                sb.append(stringify(arr[i].clone()));
+                i += 1;
+            }
+            sb.append("]");
+            return sb.to_string();
+        }
+        JsonValue::Object(raw_props) => {
+            let props: Vec<JsonProperty> = raw_props;
+            let mut sb = StringBuilder::new();
+            sb.append("{");
+            let mut i: usize = 0;
+            while i < props.len() {
+                if i > 0 {
+                    sb.append(",");
+                }
+                let p: JsonProperty = props[i].clone();
+                sb.append(escape_string(p.key.clone()));
+                sb.append(":");
+                sb.append(stringify(p.value.clone()));
+                i += 1;
+            }
+            sb.append("}");
+            return sb.to_string();
+        }
+    }
+}
+
+struct JsonParser {
+    chars: Vec<char>,
+    pos: usize,
+    len: usize,
+}
+
+impl JsonParser {
+    fn new(input: string) -> JsonParser {
+        let chars: Vec<char> = input.chars();
+        let len = chars.len();
+        return JsonParser {
+            chars,
+            pos: 0,
+            len,
+        };
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.pos < self.len {
+            let c = self.chars[self.pos];
+            if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(&self) -> char {
+        if self.pos >= self.len {
+            return '\0';
+        }
+        return self.chars[self.pos];
+    }
+
+    fn parse_value(&mut self) -> Result<JsonValue, string> {
+        self.skip_whitespace();
+        if self.pos >= self.len {
+            return Err("Unexpected end of JSON input".to_string());
+        }
+        let c = self.peek();
+        if c == 'n' {
+            return self.parse_null();
+        } else if c == 't' || c == 'f' {
+            return self.parse_bool();
+        } else if c == '"' {
+            return self.parse_string_value();
+        } else if c == '[' {
+            return self.parse_array();
+        } else if c == '{' {
+            return self.parse_object();
+        } else if c == '-' || (c >= '0' && c <= '9') {
+            return self.parse_number();
+        } else {
+            let p_str = f"{self.pos}";
+            return Err("Unexpected token at position " + p_str);
+        }
+    }
+
+    fn parse_null(&mut self) -> Result<JsonValue, string> {
+        if self.pos + 4 <= self.len {
+            if self.chars[self.pos] == 'n' && self.chars[self.pos + 1] == 'u' && self.chars[self.pos + 2] == 'l' && self.chars[self.pos + 3] == 'l' {
+                self.pos += 4;
+                return Ok(JsonValue::Null);
+            }
+        }
+        return Err("Expected null".to_string());
+    }
+
+    fn parse_bool(&mut self) -> Result<JsonValue, string> {
+        if self.pos + 4 <= self.len {
+            if self.chars[self.pos] == 't' && self.chars[self.pos + 1] == 'r' && self.chars[self.pos + 2] == 'u' && self.chars[self.pos + 3] == 'e' {
+                self.pos += 4;
+                return Ok(JsonValue::Bool(true));
+            }
+        }
+        if self.pos + 5 <= self.len {
+            if self.chars[self.pos] == 'f' && self.chars[self.pos + 1] == 'a' && self.chars[self.pos + 2] == 'l' && self.chars[self.pos + 3] == 's' && self.chars[self.pos + 4] == 'e' {
+                self.pos += 5;
+                return Ok(JsonValue::Bool(false));
+            }
+        }
+        return Err("Expected boolean".to_string());
+    }
+
+    fn parse_raw_string(&mut self) -> Result<string, string> {
+        if self.peek() != '"' {
+            return Err("Expected '\"'".to_string());
+        }
+        self.pos += 1;
+        let mut sb = StringBuilder::new();
+        while self.pos < self.len {
+            let c = self.chars[self.pos];
+            if c == '"' {
+                self.pos += 1;
+                return Ok(sb.to_string());
+            } else if c == '\\' {
+                self.pos += 1;
+                if self.pos >= self.len {
+                    return Err("Unterminated escape sequence".to_string());
+                }
+                let esc = self.chars[self.pos];
+                if esc == '"' {
+                    sb.append("\"");
+                } else if esc == '\\' {
+                    sb.append("\\");
+                } else if esc == 'n' {
+                    sb.append("\n");
+                } else if esc == 'r' {
+                    sb.append("\r");
+                } else if esc == 't' {
+                    sb.append("\t");
+                } else {
+                    sb.append(esc.to_string());
+                }
+                self.pos += 1;
+            } else {
+                sb.append(c.to_string());
+                self.pos += 1;
+            }
+        }
+        return Err("Unterminated string literal".to_string());
+    }
+
+    fn parse_string_value(&mut self) -> Result<JsonValue, string> {
+        match self.parse_raw_string() {
+            Ok(s) => return Ok(JsonValue::String(s)),
+            Err(e) => return Err(e),
+        }
+    }
+
+    fn parse_number(&mut self) -> Result<JsonValue, string> {
+        let mut sign: i64 = 1;
+        if self.chars[self.pos] == '-' {
+            sign = -1;
+            self.pos += 1;
+        }
+        if self.pos >= self.len {
+            return Err("Unexpected end of number".to_string());
+        }
+        let mut n: i64 = 0;
+        let start_pos = self.pos;
+        while self.pos < self.len {
+            let c = self.chars[self.pos];
+            if c >= '0' && c <= '9' {
+                let digit: i64 = (c as i64) - ('0' as i64);
+                n = n * 10 + digit;
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if self.pos == start_pos {
+            return Err("Invalid number digits".to_string());
+        }
+        return Ok(JsonValue::Number(n * sign));
+    }
+
+    fn parse_array(&mut self) -> Result<JsonValue, string> {
+        self.pos += 1; // skip '['
+        self.skip_whitespace();
+        let mut items = Vec::<JsonValue>::new();
+        if self.pos < self.len && self.chars[self.pos] == ']' {
+            self.pos += 1;
+            return Ok(JsonValue::Array(items));
+        }
+
+        while self.pos < self.len {
+            let val = self.parse_value()?;
+            items.push(val);
+            self.skip_whitespace();
+            if self.pos < self.len && self.chars[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(JsonValue::Array(items));
+            }
+            if self.pos < self.len && self.chars[self.pos] == ',' {
+                self.pos += 1;
+            } else {
+                return Err("Expected ',' or ']' in array".to_string());
+            }
+        }
+        return Err("Unterminated array".to_string());
+    }
+
+    fn parse_object(&mut self) -> Result<JsonValue, string> {
+        self.pos += 1; // skip '{'
+        self.skip_whitespace();
+        let mut props = Vec::<JsonProperty>::new();
+        if self.pos < self.len && self.chars[self.pos] == '}' {
+            self.pos += 1;
+            return Ok(JsonValue::Object(props));
+        }
+
+        while self.pos < self.len {
+            self.skip_whitespace();
+            let key = self.parse_raw_string()?;
+            self.skip_whitespace();
+            if self.pos >= self.len || self.chars[self.pos] != ':' {
+                return Err("Expected ':' after object key".to_string());
+            }
+            self.pos += 1; // skip ':'
+            let val = self.parse_value()?;
+            props.push(JsonProperty { key, value: val });
+            self.skip_whitespace();
+            if self.pos < self.len && self.chars[self.pos] == '}' {
+                self.pos += 1;
+                return Ok(JsonValue::Object(props));
+            }
+            if self.pos < self.len && self.chars[self.pos] == ',' {
+                self.pos += 1;
+            } else {
+                return Err("Expected ',' or '}' in object".to_string());
+            }
+        }
+        return Err("Unterminated object".to_string());
+    }
+}
+
+pub fn parse(input: string) -> Result<JsonValue, string> {
+    let mut parser = JsonParser::new(input);
+    let val = parser.parse_value()?;
+    parser.skip_whitespace();
+    return Ok(val);
+}
